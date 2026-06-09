@@ -42,13 +42,14 @@ jobs:
           mkdir -p app/src/main/java/com/example/runner
           mkdir -p app/src/main/assets
           mkdir -p app/src/main/res/values
-
+          # Force Gradle to run strictly on Java 17 configured by setup-java
+          echo "org.gradle.java.home=${JAVA_HOME}" > gradle.properties
+          echo "android.useAndroidX=true" >> gradle.properties
           # Creating settings.gradle
           cat << 'EOF' > settings.gradle
           rootProject.name = 'WebRunner'
           include ':app'
           EOF
-
           # Creating build.gradle
           cat << 'EOF' > build.gradle
           buildscript {
@@ -67,17 +68,12 @@ jobs:
               }
           }
           EOF
-
-          # Creating app/build.gradle
+          # Creating app/build.gradle using safe apply plugin syntax
           cat << EOF > app/build.gradle
-          plugins {
-              id 'com.android.application'
-          }
-
+          apply plugin: 'com.android.application'
           android {
               namespace 'com.example.runner'
               compileSdk 33
-
               defaultConfig {
                   applicationId "${PACKAGE_ID}"
                   minSdk 24
@@ -85,12 +81,10 @@ jobs:
                   versionCode ${VERSION_CODE}
                   versionName "${VERSION_NAME}"
               }
-
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_1_8
                   targetCompatibility JavaVersion.VERSION_1_8
               }
-
               buildTypes {
                   release {
                       minifyEnabled false
@@ -98,12 +92,10 @@ jobs:
                   }
               }
           }
-
           dependencies {
               implementation 'androidx.appcompat:appcompat:1.6.1'
           }
           EOF
-
           # Create AndroidManifest.xml
           cat << EOF > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
@@ -130,11 +122,9 @@ jobs:
               </application>
           </manifest>
           EOF
-
           # Create MainActivity.java with robust permission request handling
           cat << 'EOF' > app/src/main/java/com/example/runner/MainActivity.java
           package com.example.runner;
-
           import android.app.Activity;
           import android.os.Bundle;
           import android.webkit.WebSettings;
@@ -143,10 +133,8 @@ jobs:
           import android.webkit.WebChromeClient;
           import android.webkit.PermissionRequest;
           import android.view.Window;
-
           public class MainActivity extends Activity {
               private WebView mWebView;
-
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
@@ -178,7 +166,6 @@ jobs:
                   mWebView.loadUrl("file:///android_asset/index.html");
                   setContentView(mWebView);
               }
-
               @Override
               public void onBackPressed() {
                   if (mWebView.canGoBack()) {
@@ -189,14 +176,12 @@ jobs:
               }
           }
           EOF
-
           # Create strings.xml
           cat << EOF > app/src/main/res/values/strings.xml
           <resources>
               <string name="app_name">${APP_NAME}</string>
           </resources>
           EOF
-
       - name: Fetch and Wrap Website Archive ZIP
         run: |
           echo "Verifying local web workspace ZIP archive inside repository..."
@@ -218,28 +203,35 @@ jobs:
                   echo "WARNING: index.html not found in package payload!"
               fi
           fi
-
+      - name: Setup Gradle Wrapper
+        run: |
+          gradle wrapper --gradle-version 8.0.2
       - name: Run APK Compile Gradle Task
         run: |
-          gradle :app:assembleDebug
-
+          ./gradlew :app:assembleDebug
+      - name: Package APK into ZIP
+        run: |
+          # This step compresses the raw APK file into a real .zip file containing the APK
+          cd app/build/outputs/apk/debug/
+          zip -r app-debug.zip app-debug.apk
       - name: Generate Unique Release Tag
         id: tag_gen
         run: |
           CLEANED_NAME=$(echo "${APP_NAME}" | tr -cd '[:alnum:]_')
           TAG="release-${CLEANED_NAME}-${{ github.run_number }}"
           echo "TAG_NAME=$TAG" >> $GITHUB_OUTPUT
-
       - name: Create GitHub Release and Upload APK
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.tag_gen.outputs.TAG_NAME }}
-          name: "Release: ${APP_NAME} (v${VERSION_NAME})"
+          name: "Release: ${{ env.APP_NAME }} (v${{ env.VERSION_NAME }})"
           body: |
             Automated Android package build for **${{ env.APP_NAME }}**
             - **Package ID:** `${{ env.PACKAGE_ID }}`
             - **Build ID:** `${{ github.run_number }}`
-          files: app/build/outputs/apk/debug/app-debug.apk
+          files: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/debug/app-debug.zip
           draft: false
           prerelease: false
         env:
