@@ -1,4 +1,4 @@
-name: Build Dynamic APK
+name: Build APK from Web Archive
 on:
   repository_dispatch:
     types: [build-apk]
@@ -11,28 +11,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Initialize Android Project
+      - name: Initialize Android Web-View Wrapper Template
         run: |
-          echo "Initializing dynamic Gradle project structure..."
+          echo "Initializing lightweight Gradle project structure..."
           mkdir -p app/src/main/java/com/example/runner
           mkdir -p app/src/main/assets
           mkdir -p app/src/main/res/values
 
-          # 1. Create root settings.gradle
+          # Creating settings.gradle
           cat << 'EOF' > settings.gradle
           rootProject.name = 'WebRunner'
           include ':app'
           EOF
 
-          # 2. Create root build.gradle
+          # Creating build.gradle
           cat << 'EOF' > build.gradle
           buildscript {
               repositories {
@@ -51,7 +51,7 @@ jobs:
           }
           EOF
 
-          # 3. Create app/build.gradle with direct parameters from client_payload
+          # Creating app/build.gradle
           cat << 'EOF' > app/build.gradle
           plugins {
               id 'com.android.application'
@@ -87,7 +87,7 @@ jobs:
           }
           EOF
 
-          # 4. Create AndroidManifest.xml
+          # Create AndroidManifest.xml
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -110,7 +110,7 @@ jobs:
           </manifest>
           EOF
 
-          # 5. Create MainActivity.java
+          # Create MainActivity.java
           cat << 'EOF' > app/src/main/java/com/example/runner/MainActivity.java
           package com.example.runner;
 
@@ -155,7 +155,7 @@ jobs:
           }
           EOF
 
-          # 6. Create strings.xml with dynamic App Name from trigger payload
+          # Create strings.xml
           cat << 'EOF' > app/src/main/res/values/strings.xml
           <resources>
               <string name="app_name">${{ github.event.client_payload.appName }}</string>
@@ -164,13 +164,15 @@ jobs:
 
       - name: Fetch and Wrap Website Archive ZIP
         run: |
-          echo "Downloading web workspace ZIP archive from live source payload..."
-          curl -L -o web_payload.zip "${{ github.event.client_payload.zipUrl }}"
+          echo "Verifying local web workspace ZIP archive inside repository..."
+          if [ ! -f web_payload.zip ]; then
+              echo "ERROR: web_payload.zip not found in repository!"
+              exit 1
+          fi
           
           echo "Extracting workspace targets deep into assets folder..."
           unzip -o web_payload.zip -d app/src/main/assets/
           
-          # Smart Extraction Check: if index.html is in a subfolder, bring contents to root of assets
           if [ ! -f app/src/main/assets/index.html ]; then
               echo "index.html not found in assets root. Checking subdirectories..."
               SUBDIR=$(find app/src/main/assets/ -name "index.html" -print -quit | sed 's|/index.html||')
@@ -182,7 +184,6 @@ jobs:
               fi
           fi
           
-          # Clean up downloaded zip
           rm web_payload.zip
 
       - name: Setup Gradle
@@ -194,7 +195,7 @@ jobs:
         run: |
           gradle :app:assembleDebug
 
-      - name: Deploy Compiled Artifact Back to Repository Builds
+      - name: Deploy Compiled Artifact Back to Repository
         run: |
           echo "Setting up repository output folders..."
           mkdir -p builds
