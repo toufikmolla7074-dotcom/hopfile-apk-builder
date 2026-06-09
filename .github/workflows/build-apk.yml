@@ -1,5 +1,7 @@
 name: Build APK from Web Archive
+
 on:
+  workflow_dispatch:
   repository_dispatch:
     types: [build-apk]
 
@@ -9,6 +11,13 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      APP_NAME: ${{ github.event.client_payload.appName || 'My App' }}
+      PACKAGE_ID: ${{ github.event.client_payload.packageId || 'com.example.runner' }}
+      VERSION_NAME: ${{ github.event.client_payload.versionName || '1.0.0' }}
+      VERSION_CODE: ${{ github.event.client_payload.versionCode || '1' }}
+      ZIP_NAME: ${{ github.event.client_payload.zipName || 'web_payload.zip' }}
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -18,6 +27,14 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '17'
+
+      - name: Setup Android SDK (Licenses Auto-Accept)
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.2'
 
       - name: Initialize Android Web-View Wrapper Template
         run: |
@@ -52,7 +69,7 @@ jobs:
           EOF
 
           # Creating app/build.gradle
-          cat << 'EOF' > app/build.gradle
+          cat << EOF > app/build.gradle
           plugins {
               id 'com.android.application'
           }
@@ -62,11 +79,11 @@ jobs:
               compileSdk 33
 
               defaultConfig {
-                  applicationId "${{ github.event.client_payload.packageId }}"
+                  applicationId "${PACKAGE_ID}"
                   minSdk 24
                   targetSdk 33
-                  versionCode ${{ github.event.client_payload.versionCode }}
-                  versionName "${{ github.event.client_payload.versionName }}"
+                  versionCode ${VERSION_CODE}
+                  versionName "${VERSION_NAME}"
               }
 
               compileOptions {
@@ -88,10 +105,14 @@ jobs:
           EOF
 
           # Create AndroidManifest.xml
-          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          cat << EOF > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.CAMERA" />
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
+              <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+              
               <application
                   android:allowBackup="true"
                   android:label="@string/app_name"
@@ -110,7 +131,7 @@ jobs:
           </manifest>
           EOF
 
-          # Create MainActivity.java
+          # Create MainActivity.java with robust permission request handling
           cat << 'EOF' > app/src/main/java/com/example/runner/MainActivity.java
           package com.example.runner;
 
@@ -119,6 +140,8 @@ jobs:
           import android.webkit.WebSettings;
           import android.webkit.WebView;
           import android.webkit.WebViewClient;
+          import android.webkit.WebChromeClient;
+          import android.webkit.PermissionRequest;
           import android.view.Window;
 
           public class MainActivity extends Activity {
@@ -136,8 +159,20 @@ jobs:
                   webSettings.setDatabaseEnabled(true);
                   webSettings.setAllowFileAccess(true);
                   webSettings.setAllowContentAccess(true);
+                  webSettings.setAllowUniversalAccessFromFileURLs(true);
                   
                   mWebView.setWebViewClient(new WebViewClient());
+                  mWebView.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public void onPermissionRequest(final PermissionRequest request) {
+                          runOnUiThread(new Runnable() {
+                              @Override
+                              public void run() {
+                                  request.grant(request.getResources());
+                              }
+                          });
+                      }
+                  });
                   mWebView.setBackgroundColor(0);
                   
                   mWebView.loadUrl("file:///android_asset/index.html");
@@ -156,22 +191,22 @@ jobs:
           EOF
 
           # Create strings.xml
-          cat << 'EOF' > app/src/main/res/values/strings.xml
+          cat << EOF > app/src/main/res/values/strings.xml
           <resources>
-              <string name="app_name">${{ github.event.client_payload.appName }}</string>
+              <string name="app_name">${APP_NAME}</string>
           </resources>
           EOF
 
       - name: Fetch and Wrap Website Archive ZIP
         run: |
           echo "Verifying local web workspace ZIP archive inside repository..."
-          if [ ! -f web_payload.zip ]; then
-              echo "ERROR: web_payload.zip not found in repository!"
+          if [ ! -f "${ZIP_NAME}" ]; then
+              echo "ERROR: ${ZIP_NAME} not found in repository!"
               exit 1
           fi
           
           echo "Extracting workspace targets deep into assets folder..."
-          unzip -o web_payload.zip -d app/src/main/assets/
+          unzip -o "${ZIP_NAME}" -d app/src/main/assets/
           
           if [ ! -f app/src/main/assets/index.html ]; then
               echo "index.html not found in assets root. Checking subdirectories..."
@@ -183,36 +218,15 @@ jobs:
                   echo "WARNING: index.html not found in package payload!"
               fi
           fi
-          
-          rm web_payload.zip
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.2'
 
       - name: Run APK Compile Gradle Task
         run: |
           gradle :app:assembleDebug
 
-      - name: Deploy Compiled Artifact Back to Repository
-        run: |
-          echo "Setting up repository output folders..."
-          mkdir -p builds
-          cp app/build/outputs/apk/debug/app-debug.apk builds/app-debug.apk
-          
-          echo "Synchronizing git directories..."
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          git add builds/app-debug.apk
-          git commit -m "dist: update compiled android package for '${{ github.event.client_payload.appName }}'" || echo "No changes detected inside binary stream."
-          git push origin main || git push origin master || echo "Push failed, continuing pipeline..."
-
       - name: Generate Unique Release Tag
         id: tag_gen
         run: |
-          CLEANED_NAME=$(echo "${{ github.event.client_payload.appName }}" | tr -cd '[:alnum:]_')
+          CLEANED_NAME=$(echo "${APP_NAME}" | tr -cd '[:alnum:]_')
           TAG="release-${CLEANED_NAME}-${{ github.run_number }}"
           echo "TAG_NAME=$TAG" >> $GITHUB_OUTPUT
 
@@ -220,13 +234,21 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.tag_gen.outputs.TAG_NAME }}
-          name: "Release: ${{ github.event.client_payload.appName }} (v${{ github.event.client_payload.versionName }})"
+          name: "Release: ${APP_NAME} (v${VERSION_NAME})"
           body: |
-            Automated Android package build for **${{ github.event.client_payload.appName }}**
-            - **Package ID:** `${{ github.event.client_payload.packageId }}`
+            Automated Android package build for **${{ env.APP_NAME }}**
+            - **Package ID:** `${{ env.PACKAGE_ID }}`
             - **Build ID:** `${{ github.run_number }}`
           files: app/build/outputs/apk/debug/app-debug.apk
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Clean up temporary payload zip from git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git rm -f "${ZIP_NAME}" || true
+          git commit -m "chore: clean up temporary build payload [skip ci]" || true
+          git push origin main || git push origin master || true
