@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       APP_NAME: ${{ github.event.client_payload.appName || 'My App' }}
-      PACKAGE_ID: ${{ github.event.client_payload.packageId || 'com.example.runner' }}
+      PACKAGE_ID: ${{ github.event.client_payload.packageId || github.event.client_payload.packageID || github.event.client_payload.packageName || 'com.example.runner' }}
       VERSION_NAME: ${{ github.event.client_payload.versionName || '1.0.0' }}
       VERSION_CODE: ${{ github.event.client_payload.versionCode || '1' }}
       ZIP_NAME: ${{ github.event.client_payload.zipName || 'web_payload.zip' }}
@@ -43,10 +43,6 @@ jobs:
           mkdir -p app/src/main/assets
           mkdir -p app/src/main/res/values
 
-          # Force Gradle to run strictly on Java 17 configured by setup-java
-          echo "org.gradle.java.home=${JAVA_HOME}" > gradle.properties
-          echo "android.useAndroidX=true" >> gradle.properties
-
           # Creating settings.gradle
           cat << 'EOF' > settings.gradle
           rootProject.name = 'WebRunner'
@@ -72,9 +68,11 @@ jobs:
           }
           EOF
 
-          # Creating app/build.gradle using safe apply plugin syntax
+          # Creating app/build.gradle
           cat << EOF > app/build.gradle
-          apply plugin: 'com.android.application'
+          plugins {
+              id 'com.android.application'
+          }
 
           android {
               namespace 'com.example.runner'
@@ -109,7 +107,7 @@ jobs:
           # Create AndroidManifest.xml
           cat << EOF > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.runner">
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.CAMERA" />
               <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -199,6 +197,10 @@ jobs:
           </resources>
           EOF
 
+      - name: Generate Gradle Wrapper
+        run: |
+          gradle wrapper --gradle-version 8.2
+
       - name: Fetch and Wrap Website Archive ZIP
         run: |
           echo "Verifying local web workspace ZIP archive inside repository..."
@@ -221,39 +223,29 @@ jobs:
               fi
           fi
 
-      - name: Setup Gradle Wrapper
-        run: |
-          gradle wrapper --gradle-version 8.0.2
-
       - name: Run APK Compile Gradle Task
         run: |
+          chmod +x gradlew
           ./gradlew :app:assembleDebug
 
-      - name: Package APK into ZIP
-        run: |
-          # This step compresses the raw APK file into a real .zip file containing the APK
-          cd app/build/outputs/apk/debug/
-          zip -r app-debug.zip app-debug.apk
-
-      - name: Generate Unique Release Tag
-        id: tag_gen
+      - name: Rename APK to Application Name
+        id: apk_rename
         run: |
           CLEANED_NAME=$(echo "${APP_NAME}" | tr -cd '[:alnum:]_')
-          TAG="release-${CLEANED_NAME}-${{ github.run_number }}"
-          echo "TAG_NAME=$TAG" >> $GITHUB_OUTPUT
+          APK_FILENAME="${CLEANED_NAME}_v${VERSION_NAME}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "app/build/outputs/apk/debug/${APK_FILENAME}"
+          echo "APK_FILENAME=${APK_FILENAME}" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release and Upload APK
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.tag_gen.outputs.TAG_NAME }}
-          name: "Release: ${{ env.APP_NAME }} (v${{ env.VERSION_NAME }})"
+          name: "Release: ${APP_NAME} (v${VERSION_NAME})"
           body: |
             Automated Android package build for **${{ env.APP_NAME }}**
             - **Package ID:** `${{ env.PACKAGE_ID }}`
             - **Build ID:** `${{ github.run_number }}`
-          files: |
-            app/build/outputs/apk/debug/app-debug.apk
-            app/build/outputs/apk/debug/app-debug.zip
+          files: app/build/outputs/apk/debug/${{ steps.apk_rename.outputs.APK_FILENAME }}
           draft: false
           prerelease: false
         env:
