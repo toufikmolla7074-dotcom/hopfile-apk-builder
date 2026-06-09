@@ -229,6 +229,12 @@ jobs:
         run: |
           ./gradlew :app:assembleDebug
 
+      - name: Package APK into ZIP
+        run: |
+          # This step compresses the raw APK file into a real .zip file containing the APK
+          cd app/build/outputs/apk/debug/
+          zip -r app-debug.zip app-debug.apk
+
       - name: Generate Unique Release Tag
         id: tag_gen
         run: |
@@ -240,12 +246,14 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.tag_gen.outputs.TAG_NAME }}
-          name: "Release: ${APP_NAME} (v${VERSION_NAME})"
+          name: "Release: ${{ env.APP_NAME }} (v${{ env.VERSION_NAME }})"
           body: |
             Automated Android package build for **${{ env.APP_NAME }}**
             - **Package ID:** `${{ env.PACKAGE_ID }}`
             - **Build ID:** `${{ github.run_number }}`
-          files: app/build/outputs/apk/debug/app-debug.apk
+          files: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/debug/app-debug.zip
           draft: false
           prerelease: false
         env:
