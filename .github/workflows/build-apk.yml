@@ -43,6 +43,10 @@ jobs:
           mkdir -p app/src/main/assets
           mkdir -p app/src/main/res/values
 
+          # Force Gradle to run strictly on Java 17 configured by setup-java
+          echo "org.gradle.java.home=${JAVA_HOME}" > gradle.properties
+          echo "android.useAndroidX=true" >> gradle.properties
+
           # Creating settings.gradle
           cat << 'EOF' > settings.gradle
           rootProject.name = 'WebRunner'
@@ -68,11 +72,9 @@ jobs:
           }
           EOF
 
-          # Creating app/build.gradle
+          # Creating app/build.gradle using safe apply plugin syntax
           cat << EOF > app/build.gradle
-          plugins {
-              id 'com.android.application'
-          }
+          apply plugin: 'com.android.application'
 
           android {
               namespace 'com.example.runner'
@@ -219,9 +221,13 @@ jobs:
               fi
           fi
 
+      - name: Setup Gradle Wrapper
+        run: |
+          gradle wrapper --gradle-version 8.0.2
+
       - name: Run APK Compile Gradle Task
         run: |
-          gradle :app:assembleDebug
+          ./gradlew :app:assembleDebug
 
       - name: Generate Unique Release Tag
         id: tag_gen
